@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
-	"reflect"
 	"sync"
 )
 
@@ -25,36 +24,56 @@ func (c *Coordinator) RequestTask(args *MrArgs, reply *MrReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tmp := EmptyTask()
+	done := true
+	mapDone := true
 	for _, t := range c.task {
 		if t.IsIdle() && t.Style == Map {
-			reply.T = t
+
 			t.Status = In_progress
 			t.SetTrigger()
-			// log.Printf("[req]task: %v", t)
+			tt := *t
+			reply.T = &tt
+
 			return nil
 		}
 
-		if t.Style == Reduce && t.IsNotResponse(20) {
+		if t.Style == Reduce && t.IsNotResponse() {
+
 			tmp = t
 		}
 
 		if t.Style == Reduce && t.IsIdle() {
+
 			tmp = t
 		}
 
-		if t.Style == Map && t.IsNotResponse(20) {
+		if t.Style == Map && t.IsNotResponse() {
+
 			tmp = t
 		}
 
+		if t.Style == Map && !t.IsCompleted() {
+			mapDone = false
+		}
+
+		if t.Status != Completed {
+			done = false
+		}
 	}
-	if reflect.DeepEqual(tmp, EmptyTask()) {
-		return errors.New("没有种子了")
+	if done && len(c.task) > 0 {
+		return errors.New("")
 	}
 
-	reply.T = tmp
+	if !mapDone {
+		reply.T = &*EmptyTask()
+		return nil
+	}
+
 	tmp.SetTrigger()
 	tmp.Status = In_progress
-	// log.Printf("[req]task: %v", tmp)
+	tt := *tmp
+	reply.T = &tt
+
 	return nil
 }
 
@@ -62,16 +81,9 @@ func (c *Coordinator) ReplyTask(args *MrArgs, reply *MrReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	initReduce := true
+	updateT := EmptyTask()
 	// log.Printf("[reply]: task: %v", args.T)
 	for _, t := range c.task {
-		if t.ID == args.T.ID && t.Style == args.T.Style {
-			// 如果之前接受, 就不在计算了
-			if t.Status == Completed {
-				return nil
-			}
-			t.Status = args.T.Status
-		}
-
 		// 判断是否是完成的map任务
 		if args.T.Style == Map && args.T.Status == Completed {
 			// 1. 判断当前任务是否是reduce任务
@@ -83,6 +95,15 @@ func (c *Coordinator) ReplyTask(args *MrArgs, reply *MrReply) error {
 				t.FileArg = "mr-" + mapOutFile(args.T.ID, t.ID) + "," + t.FileArg
 			}
 		}
+		if t.ID == args.T.ID && t.Style == args.T.Style {
+			// 如果之前接受, 就不在计算了
+			if t.Status == Completed {
+				return nil
+			}
+			updateT = t
+
+		}
+
 	}
 	if initReduce == true {
 		for i := 0; i < args.T.R; i++ {
@@ -91,6 +112,9 @@ func (c *Coordinator) ReplyTask(args *MrArgs, reply *MrReply) error {
 			c.task = append(c.task, t)
 		}
 	}
+
+	updateT.Status = args.T.Status
+
 	return nil
 }
 

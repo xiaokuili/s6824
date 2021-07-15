@@ -75,6 +75,7 @@ func (mr *mrWorker) runMap(t *Task, mapf func(string, string) []KeyValue) bool {
 
 	for i, v := range intermediate {
 		oname := "mr-" + strconv.Itoa(t.ID) + "-" + strconv.Itoa(i)
+		os.Remove(oname)
 		ofile, _ := os.Create(oname)
 		enc := json.NewEncoder(ofile)
 		for _, kv := range v {
@@ -96,13 +97,16 @@ func (mr *mrWorker) runReduce(t *Task, reducef func(string, []string) string) bo
 	// 写入文件
 
 	oname := "mr-out-" + strconv.Itoa(t.ID)
+	os.Remove(oname)
 	ofile, _ := os.Create(oname)
 	filenames := strings.Split(t.FileArg, ",")
+
 	kva := make([]KeyValue, 0)
 	for _, filename := range filenames {
 		if filename == "" {
 			break
 		}
+
 		file, err := os.Open(filename)
 
 		if err != nil {
@@ -173,6 +177,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		w := &mrWorker{}
 		if ok := w.callReq(task); !ok {
 			os.Exit(0)
+			log.Println("stop worker")
 		}
 		if w.run(task, mapf, reducef) {
 			task.Status = Completed
@@ -225,6 +230,6 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	fmt.Println(err)
+	// fmt.Println(err)
 	return false
 }

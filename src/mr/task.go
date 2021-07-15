@@ -1,6 +1,8 @@
 package mr
 
-import "time"
+import (
+	"time"
+)
 
 type Status int
 type Style int
@@ -35,6 +37,10 @@ func NewTask(id int, style Style) *Task {
 	}
 }
 
+func CreateTask() Task {
+	return Task{}
+}
+
 func EmptyTask() *Task {
 	return &Task{}
 }
@@ -56,10 +62,16 @@ func (t *Task) IsIdle() bool {
 	return t.Status == Idle
 }
 
+// 判断任务是否完成
+func (t *Task) IsCompleted() bool {
+	return t.Status == Completed
+}
+
 // 判断任务是否长时间不相应
-func (t *Task) IsNotResponse(i int) bool {
+func (t *Task) IsNotResponse() bool {
 	if t.Status == In_progress {
-		return time.Now().Sub(t.Trigger) > time.Duration(i)
+
+		return time.Since(t.Trigger) > time.Duration(10*time.Second)
 	}
 	return false
 
