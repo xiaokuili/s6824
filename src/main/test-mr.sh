@@ -16,14 +16,14 @@ cd mr-tmp || exit 1
 rm -f mr-*
 
 # make sure software is freshly built.
-(cd ../../mrapps && go build $RACE -buildmode=plugin wc.go) || exit 1
-(cd ../../mrapps && go build $RACE -buildmode=plugin indexer.go) || exit 1
-(cd ../../mrapps && go build $RACE -buildmode=plugin mtiming.go) || exit 1
-(cd ../../mrapps && go build $RACE -buildmode=plugin rtiming.go) || exit 1
-(cd ../../mrapps && go build $RACE -buildmode=plugin jobcount.go) || exit 1
-(cd ../../mrapps && go build $RACE -buildmode=plugin early_exit.go) || exit 1
-(cd ../../mrapps && go build $RACE -buildmode=plugin crash.go) || exit 1
-(cd ../../mrapps && go build $RACE -buildmode=plugin nocrash.go) || exit 1
+(cd ../../mrapps && go build $RACE   -buildmode=plugin wc.go) || exit 1
+(cd ../../mrapps && go build $RACE   -buildmode=plugin indexer.go) || exit 1
+(cd ../../mrapps && go build $RACE   -buildmode=plugin mtiming.go) || exit 1
+(cd ../../mrapps && go build $RACE   -buildmode=plugin rtiming.go) || exit 1
+(cd ../../mrapps && go build $RACE   -buildmode=plugin jobcount.go) || exit 1
+(cd ../../mrapps && go build $RACE   -buildmode=plugin early_exit.go) || exit 1
+(cd ../../mrapps && go build $RACE   -buildmode=plugin crash.go) || exit 1
+(cd ../../mrapps && go build $RACE   -buildmode=plugin nocrash.go) || exit 1
 (cd .. && go build $RACE mrcoordinator.go) || exit 1
 (cd .. && go build $RACE mrworker.go) || exit 1
 (cd .. && go build $RACE mrsequential.go) || exit 1
@@ -34,11 +34,12 @@ failed_any=0
 # first word-count
 
 # generate the correct output
+# mr-tmp文件夹中
 ../mrsequential ../../mrapps/wc.so ../pg*txt || exit 1
 sort mr-out-0 > mr-correct-wc.txt
 rm -f mr-out*
 
-echo '***' Starting wc test.
+# echo '***' Starting wc test.
 
 timeout -k 2s 180s ../mrcoordinator ../pg*txt &
 pid=$!

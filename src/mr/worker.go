@@ -1,20 +1,154 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+)
 
 //
 // Map functions return a slice of KeyValue.
 //
+type ByKey []KeyValue
+
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
 type KeyValue struct {
 	Key   string
 	Value string
 }
 
-//
+func mapOutFile(m, r int) string {
+	return strconv.Itoa(m) + "-" + strconv.Itoa(r)
+}
+
+type mrWorker struct {
+}
+
+func (mr *mrWorker) callReq(t *Task) bool {
+	args := &MrArgs{}
+	apply := &MrReply{T: t}
+	return call("Coordinator.RequestTask", args, apply)
+
+}
+
+func (mr *mrWorker) run(t *Task, mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) bool {
+	if t.Style == Map {
+		return mr.runMap(t, mapf)
+	}
+	if t.Style == Reduce {
+		return mr.runReduce(t, reducef)
+	}
+	return false
+}
+
+func (mr *mrWorker) runMap(t *Task, mapf func(string, string) []KeyValue) bool {
+	// 读取文件
+	// 执行函数
+	// 写入文件: 每一行都是(key, value), 基于key写入到不同的文件
+	intermediate := make([][]KeyValue, t.R)
+	filename := t.FileArg
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	file.Close()
+	kva := mapf(filename, string(content))
+
+	for _, kv := range kva {
+		intermediate[ihash(kv.Key)%t.R] = append(intermediate[ihash(kv.Key)%t.R], kv)
+	}
+
+	for i, v := range intermediate {
+		oname := "mr-" + strconv.Itoa(t.ID) + "-" + strconv.Itoa(i)
+		ofile, _ := os.Create(oname)
+		enc := json.NewEncoder(ofile)
+		for _, kv := range v {
+			err := enc.Encode(&kv)
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}
+		ofile.Close()
+
+	}
+	return true
+
+}
+
+func (mr *mrWorker) runReduce(t *Task, reducef func(string, []string) string) bool {
+	// 读取文件
+	// 执行函数
+	// 写入文件
+
+	oname := "mr-out-" + strconv.Itoa(t.ID)
+	ofile, _ := os.Create(oname)
+	filenames := strings.Split(t.FileArg, ",")
+	kva := make([]KeyValue, 0)
+	for _, filename := range filenames {
+		if filename == "" {
+			break
+		}
+		file, err := os.Open(filename)
+
+		if err != nil {
+			log.Fatalf("cannot open %v", filename)
+		}
+
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+		file.Close()
+
+	}
+	sort.Sort(ByKey(kva))
+	i := 0
+	for i < len(kva) {
+		j := i + 1
+		for j < len(kva) && kva[j].Key == kva[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, kva[k].Value)
+		}
+		output := reducef(kva[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+
+		i = j
+	}
+	ofile.Close()
+	return true
+}
+
+func (mr *mrWorker) callReply(t *Task) bool {
+
+	args := &MrArgs{T: t}
+	apply := &MrReply{}
+	return call("Coordinator.ReplyTask", args, apply)
+}
+
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
 //
@@ -23,7 +157,6 @@ func ihash(key string) int {
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
-
 
 //
 // main/mrworker.go calls this function.
@@ -35,6 +168,18 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+	for {
+		task := EmptyTask()
+		w := &mrWorker{}
+		if ok := w.callReq(task); !ok {
+			os.Exit(0)
+		}
+		if w.run(task, mapf, reducef) {
+			task.Status = Completed
+		}
+		w.callReply(task)
+
+	}
 
 }
 

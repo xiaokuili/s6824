@@ -6,13 +6,16 @@ package main
 // go run mrsequential.go wc.so pg*.txt
 //
 
-import "fmt"
-import "6.824/mr"
-import "plugin"
-import "os"
-import "log"
-import "io/ioutil"
-import "sort"
+import (
+	"fmt"
+	"io/ioutil"
+	"log"
+	"os"
+	"plugin"
+	"sort"
+
+	"6.824/mr"
+)
 
 // for sorting by key.
 type ByKey []mr.KeyValue
@@ -23,6 +26,7 @@ func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 func main() {
+
 	if len(os.Args) < 3 {
 		fmt.Fprintf(os.Stderr, "Usage: mrsequential xxx.so inputfiles...\n")
 		os.Exit(1)
@@ -30,18 +34,22 @@ func main() {
 
 	mapf, reducef := loadPlugin(os.Args[1])
 
-	//
+	// //
 	// read each input file,
 	// pass it to Map,
 	// accumulate the intermediate Map output.
 	//
 	intermediate := []mr.KeyValue{}
+
 	for _, filename := range os.Args[2:] {
+		// fmt.Println(filename)
 		file, err := os.Open(filename)
+
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
 		}
 		content, err := ioutil.ReadAll(file)
+
 		if err != nil {
 			log.Fatalf("cannot read %v", filename)
 		}
@@ -93,6 +101,7 @@ func main() {
 func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(string, []string) string) {
 	p, err := plugin.Open(filename)
 	if err != nil {
+		log.Fatalf(err.Error())
 		log.Fatalf("cannot load plugin %v", filename)
 	}
 	xmapf, err := p.Lookup("Map")
