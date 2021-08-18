@@ -137,6 +137,7 @@ func (cfg *config) crash1(i int) {
 	}
 }
 
+// 
 func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	err_msg := ""
 	v := m.Command
@@ -279,7 +280,7 @@ func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
 	cfg.mu.Lock()
 	cfg.rafts[i] = rf
 	cfg.mu.Unlock()
-
+	// 读取提交的数据
 	go applier(i, applyCh)
 
 	svc := labrpc.MakeService(rf)
