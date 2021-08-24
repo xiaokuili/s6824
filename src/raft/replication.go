@@ -1,178 +1,9 @@
 package raft
 
 import (
-	"fmt"
-	"time"
+	"log"
+	"sync/atomic"
 )
-
-func (rf *Raft) leaderCheckApply(apply AppendEntriesApply) {
-	// 考虑多并发情况下, 大量非同一批次的请求返回
-	// 只计算最新的term
-	// 当commit之后term ++
-	term := rf.term
-	if apply.Term == term {
-		rf.replicaNum = rf.replicaNum + 1
-		if rf.replicaNum > len(rf.peers)/2 {
-
-			rf.leaderApply(apply.Index)
-
-			rf.TermUpdate(term + 1)
-			rf.commitChan <- &commitInfo{
-				term: term,
-				node: rf.me,
-			}
-		}
-	}
-
-}
-
-func (rf *Raft) followerApply(commitIndex int) {
-	if commitIndex == rf.commitIndex {
-		return
-	}
-	for i, v := range rf.entries[rf.applyIndex:commitIndex] {
-		rf.applyChan <- ApplyMsg{
-			CommandValid: true,
-			CommandIndex: i + rf.applyIndex + 1,
-			Command:      v.Command,
-		}
-
-	}
-	term := rf.GetTerm()
-	rf.applyIndex = rf.commitIndex
-	rf.commitIndex = rf.applyIndex + 1
-	rf.TermUpdate(term + 1)
-
-}
-
-func (rf *Raft) leaderApply(commitIndex int) {
-	if commitIndex == rf.commitIndex {
-		return
-	}
-	for i, v := range rf.entries[rf.applyIndex:commitIndex] {
-		rf.applyChan <- ApplyMsg{
-			CommandValid: true,
-			CommandIndex: i + rf.applyIndex + 1,
-			Command:      v.Command,
-		}
-
-	}
-
-	rf.applyIndex = rf.commitIndex
-	rf.commitIndex = rf.applyIndex + 1
-	rf.reqCommitEntries()
-}
-
-func (rf *Raft) getFollowerAppendIndex(client int) (int, int) {
-
-	return rf.nextIndex[client], len(rf.entries)
-
-}
-
-func (rf *Raft) reqAppendEntries() {
-	term := rf.GetTerm()
-
-	for i, _ := range rf.peers {
-		if i != rf.me {
-			begin, end := rf.getFollowerAppendIndex(i)
-			go rf.sendAppendEntries(i, &AppendEntriesArgs{
-				Term:            term,
-				Me:              rf.me,
-				PrevLogIndex:    begin,
-				Entries:         copyEntries(rf.entries, begin, end),
-				LeaderCommitter: rf.commitIndex,
-			}, &AppendEntriesApply{})
-		}
-	}
-
-}
-
-func (rf *Raft) reqCommitEntries() {
-	term := rf.GetTerm()
-
-	for i, _ := range rf.peers {
-		if i != rf.me {
-			go rf.sendCommitEntries(i, &AppendEntriesArgs{
-				Term:            term,
-				Me:              rf.me,
-				LeaderCommitter: rf.commitIndex,
-			}, &AppendEntriesApply{})
-
-		}
-	}
-
-}
-
-func (rf *Raft) sendCommitEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesApply) bool {
-	// 判断是否成功写入log
-	ok := true
-	for {
-		ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
-		// if crash, send util node restart
-		if !ok {
-			time.Sleep(time.Second * 1)
-			ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
-			break
-		}
-
-		if reply.Succeeded {
-			rf.replicaChan <- *reply
-		}
-		break
-	}
-	rf.commitChan <- &commitInfo{
-		term: rf.term,
-		node: server,
-	}
-	return ok
-}
-
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesApply) bool {
-	// 判断是否成功写入log
-	ok := true
-	for {
-		ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
-		// if crash, send util node restart
-		if !ok {
-			time.Sleep(time.Second * 1)
-			rf.nextIndex[server] = rf.nextIndex[server] - 1
-			ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
-			break
-		}
-
-		if reply.Succeeded {
-			rf.nextIndex[server] = reply.Index
-			rf.replicaChan <- AppendEntriesApply{
-				Term:      reply.Term,
-				Index:     reply.Index + 1,
-				Succeeded: reply.Succeeded,
-			}
-			break
-		}
-	}
-
-	return ok
-}
-
-func (rf *Raft) leaderCopyEntries(command interface{}) {
-	term := rf.GetTerm()
-
-	rf.entries = append(rf.entries, &Entry{Command: command, Term: term})
-}
-
-// 基于term进行通讯c
-func (rf *Raft) isCommit(c chan *commitInfo) {
-	count := 0
-	for {
-
-		fmt.Println(<-c)
-		count++
-
-		if count >= len(rf.peers) {
-			return
-		}
-	}
-}
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -187,36 +18,191 @@ func (rf *Raft) isCommit(c chan *commitInfo) {
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-// 第一个参数返回 command 索引, 曾经被提交
-// 第二个参数返回目前的term
-// 第三个参数返回true， 如果这个服务相信他是leader
+//
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	index := -1
+	term := -1
+
 	// Your code here (2B).
-	// leader
 
-	if rf.GetRole() == leader {
-		rf.leaderCopyEntries(command)
-		rf.reqAppendEntries()
-		rf.isCommit(rf.commitChan)
-		return len(rf.entries), rf.GetTerm(), true
+	rf.rw.Lock()
+	role := rf.role
+	if role == leader {
+		log.Printf("节点%d调用start", rf.me)
+		term = rf.currentTerm
+		index = rf.addEntries(&Entry{Term: term, Commond: command})
+		rf.notifyReplicator()
 	}
-
-	return -1, -1, false
+	rf.rw.Unlock()
+	return index, term, role == leader
 }
 
-func (rf *Raft) LeaderCommit() {
-	// 自动提交
-	for {
-		if rf.GetRole() == leader {
-
-			v := <-rf.replicaChan
-			// fmt.Println(v)
-			rf.leaderCheckApply(v)
-			// time.Sleep(time.Millisecond * 100)
-
-		} else {
-			time.Sleep(time.Second * 10)
+func (rf *Raft) notifyReplicator() {
+	// 这里可以添加缓存处理并发
+	atomic.StoreInt64(&rf.replicateNum, 1)
+	for i, _ := range rf.peers {
+		if i != rf.me {
+			rf.replicatorCond[i].Signal()
 		}
+	}
+}
+
+func (rf *Raft) addEntries(e *Entry) int {
+	last := rf.LastEntry()
+	e.Index = last.Index + 1
+	rf.log = append(rf.log, e)
+
+	return rf.LastEntry().Index
+}
+
+func (rf *Raft) needReplicate(peer int) bool {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+
+	// If last log index ≥ nextIndex for a follower: send
+	// AppendEntries RPC with log entries starting at nextIndex
+	return rf.role == leader && rf.LastEntry().Index >= rf.nextIndex[peer]
+}
+
+func (rf *Raft) replicator(peer int) {
+	for {
+
+		rf.replicatorCond[peer].L.Lock()
+
+		// 除了leader其他角色启动都会被阻塞
+		for !rf.needReplicate(peer) {
+			rf.replicatorCond[peer].Wait()
+		}
+
+		rf.replicateOneRound(peer)
+		rf.replicatorCond[peer].L.Unlock()
+
+	}
+}
+
+func (rf *Raft) EntryCopy(e []*Entry) []*Entry {
+	entry := make([]*Entry, len(e))
+	for k, v := range e {
+		tmp := *v
+		entry[k] = &tmp
+	}
+	return entry
+}
+
+func (rf *Raft) refreshCommitIndex() int {
+	// If there exists an N such that N > commitIndex, a majority
+	// of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+	// set commitIndex = N
+	log.Printf("leader %d rf.log %d, rf.commitIndex %d", rf.me, rf.LastEntry().Index, rf.commitIndex)
+
+	nodeC := 0
+
+	for i := rf.LastEntry().Index; i > rf.commitIndex; i-- {
+		for j := 0; j < len(rf.matchIndex); j++ {
+
+			if rf.matchIndex[j] >= i {
+				nodeC = nodeC + 1
+				if nodeC > len(rf.peers)/2 {
+
+					return i
+				}
+			}
+		}
+	}
+
+	return rf.commitIndex
+
+}
+func (rf *Raft) genAppendEntriesArgs(peer int) *AppendEntriesArgs {
+	rf.rw.Lock()
+
+	args := &AppendEntriesArgs{
+		Term:         rf.currentTerm,
+		LeaderID:     rf.me,
+		PrevLogIndex: rf.log[rf.nextIndex[peer]-1].Index,
+		PrevLogTerm:  rf.log[rf.nextIndex[peer]-1].Term,
+		Entries:      rf.log[rf.nextIndex[peer]:],
+	}
+
+	rf.rw.Unlock()
+	return args
+}
+
+func (rf *Raft) replicateOneRound(peer int) {
+
+	reply := &AppendEntriesReply{}
+	args := rf.genAppendEntriesArgs(peer)
+
+	num := -1
+	for ok := rf.sendAppendEntries(peer, args, reply); ok; {
+		rf.rw.Lock()
+		num++
+		if num == 0 {
+			if reply.Success {
+				rf.matchIndex[peer] = reply.Index
+				rf.nextIndex[peer] = reply.Index + 1
+
+				atomic.AddInt64(&rf.replicateNum, 1)
+				n := atomic.LoadInt64(&rf.replicateNum)
+
+				if n > int64(len(rf.peers)/2) {
+
+					rf.notifyApplicer()
+				}
+			} else {
+				i := rf.nextIndex[peer]
+				if i > 1 {
+					rf.nextIndex[peer] = i - 1
+				}
+			}
+		}
+		rf.rw.Unlock()
+
+	}
+
+}
+
+func (rf *Raft) notifyApplicer() {
+
+	// 触发Signal
+
+	// rf.refreshCommitIndex()
+	rf.applierCond.Signal()
+}
+
+func (rf *Raft) needApplier() bool {
+
+	return rf.commitIndex > rf.lastApplied
+}
+
+func (rf *Raft) applier() {
+
+	for {
+		rf.rw.Lock()
+
+		// leader 触发开始提
+		// if rf.role == leader {
+		// 	rf.commitIndex = rf.refreshCommitIndex()
+		// }
+		log.Printf("节点%d, 角色%d", rf.me, rf.role)
+		for !rf.needApplier() {
+			rf.applierCond.Wait()
+		}
+
+		log.Printf("%d节点开始提交", rf.me)
+		// for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+
+		// 	rf.applyCh <- ApplyMsg{
+		// 		CommandValid: true,
+		// 		Command:      rf.log[i].Commond,
+		// 		CommandIndex: rf.log[i].Index,
+		// 	}
+		// }
+		// rf.lastApplied = rf.commitIndex
+		// // 提交完毕, 发送新的commitIndex follower需要通过心跳调用rpc来重置自己的选举时间
+		// rf.BroadcastHeartBeat(false)
+
+		rf.rw.Unlock()
 	}
 
 }

@@ -71,7 +71,7 @@ func TestReElection2A(t *testing.T) {
 	t.Log("if the old leader rejoins, that shouldn't disturb the new leader.")
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
-
+	fmt.Println(leader2)
 	// if there's no quorum, no leader should
 	// be elected.
 	t.Log("if there's no quorum, no leader should be elected.")

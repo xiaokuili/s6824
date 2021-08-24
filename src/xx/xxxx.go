@@ -6,28 +6,24 @@ import (
 	"time"
 )
 
-var locker = new(sync.Mutex)
-var cond = sync.NewCond(locker)
-
-func apply() {
-	cond.L.Lock()
-	defer cond.L.Unlock()
-
-	cond.Wait()
-	fmt.Println("begin doing sth")
-}
-
-func commit() {
-	cond.Signal()
-}
-
+// 到底锁应该加指针吗
 func main() {
-	for i := 0; i < 10; i++ {
-		go apply()
-	}
+	cond := sync.NewCond(&sync.Mutex{})
+	var done bool = true
+	go func() {
+		cond.L.Lock()
+		done = false
+		for done {
+			cond.Wait()
+		}
 
-	for i := 0; i < 10; i++ {
-		go commit()
-	}
-	time.Sleep(time.Second * 10)
+		fmt.Println("free")
+		cond.L.Unlock()
+	}()
+	time.Sleep(time.Second)
+	// done = false
+
+	cond.Signal()
+
+	time.Sleep(time.Second)
 }
