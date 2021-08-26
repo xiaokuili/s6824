@@ -1,5 +1,7 @@
 package raft
 
+import "log"
+
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
@@ -33,6 +35,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	currentTerm := rf.currentTerm
 	reply.Term = currentTerm
+	// log.Printf("[vote]节点:%d,term:%d请求节点:%d,term: %d投票", args.CandidatID, args.Term, rf.me, rf.currentTerm)
 	// // 只有follower进行投票
 	if rf.role == leader {
 		reply.VoteGranted = false
@@ -65,8 +68,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = true
 			return
 		}
-		if args.LastLogIndex >= len(rf.log) {
-			if args.LastLogTerm >= rf.log[len(rf.log)-1].Term {
+		if args.LastLogIndex >= rf.LastEntry().Index {
+			if args.LastLogTerm >= rf.LastEntry().Term {
 				reply.VoteGranted = true
 				return
 			}
@@ -142,30 +145,26 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.role = follower
 	rf.heartbeatT.Reset(0)
 	rf.electionT.Reset(rf.randomElectionTimeout())
-
-	// Reply false if term < currentTerm
-	if args.Term < rf.currentTerm {
-		reply.Success = false
-		return
-	}
-
-	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-	}
-
+	rf.currentTerm = args.Term
+	// 心跳检测目的是确定权威, 所以这里直接把term变更为leader的term
 	reply.Term = rf.currentTerm
 	reply.Index = rf.LastEntry().Index
 	// applier
 	// If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
+
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = rf.min(args.LeaderCommit, len(rf.log))
+		log.Printf("[RPC-Append-Applier] %d 请求节点 %d, commit: %d, args %#v, reply %#v", args.LeaderID, rf.me, rf.commitIndex, args, reply)
+
 		rf.applierCond.Signal()
 	}
 
 	// copy
 	if len(args.Entries) == 0 {
 		reply.Success = true
+
+		// log.Printf("[RPC-Append-Heartbeat] %d 请求节点 %d, args %#v, reply %#v", args.LeaderID, rf.me, args, reply)
 		return
 	}
 	//  Reply false if log doesn’t contain an entry at prevLogIndex
@@ -173,7 +172,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if len(rf.log) > args.PrevLogIndex {
 		if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 			reply.Success = false
-			// log.Printf("leader %d 复制日志到节点%d, 上一个日志不符合条件不复制", args.LeaderID, rf.me)
+			log.Printf("[RPC-Append-Replicator-Fail] %d 请求节点 %d, args %#v, reply %#v", args.LeaderID, rf.me, args, reply)
+
 			return
 		}
 	}
@@ -187,6 +187,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Index = rf.LastEntry().Index
 	reply.Success = true
+	log.Printf("[RPC-Append-Replicator-Succeed] %d 请求节点 %d, args %#v, reply %#v, log %#v", args.LeaderID, rf.me, args, reply, rf.log)
+
 	// log.Printf("leader %d 复制日志到节点%d, reply: %#v", args.LeaderID, rf.me, reply)
 
 }

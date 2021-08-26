@@ -213,6 +213,11 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+func (rf *Raft) WakeUp() {
+	atomic.StoreInt32(&rf.dead, 0)
+	// Your code here, if desired.
+}
+
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
@@ -241,6 +246,7 @@ func (rf *Raft) ticker() {
 			role := rf.role
 
 			if role == leader {
+				// log.Printf("节点%d发送心跳检测", rf.me)
 				rf.BroadcastHeartBeat(true)
 				// 只有leader才能重置自己的选举时间
 				// follower需要通过心跳调用rpc来重置自己的选举时间
@@ -264,19 +270,20 @@ func (rf *Raft) electionStart() {
 }
 
 func (rf *Raft) lauchVote(peer int) {
+
+	rf.rw.Lock()
 	reply := &RequestVoteReply{}
 
-	llt := 0
-	if len(rf.log) != 0 {
-		llt = rf.log[len(rf.log)-1].Term
-	}
-
-	ok := rf.sendRequestVote(peer, &RequestVoteArgs{
+	lastLogIndex := rf.log[rf.commitIndex].Index
+	lastLogTerm := rf.log[rf.commitIndex].Term
+	args := &RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidatID:   rf.me,
-		LastLogIndex: len(rf.log),
-		LastLogTerm:  llt,
-	}, reply)
+		LastLogIndex: lastLogIndex,
+		LastLogTerm:  lastLogTerm,
+	}
+	rf.rw.Unlock()
+	ok := rf.sendRequestVote(peer, args, reply)
 
 	if ok {
 
@@ -324,6 +331,12 @@ func (rf *Raft) becomeCandidater() {
 
 }
 
+func (rf *Raft) becomeFollower() {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.role = follower
+}
+
 func (rf *Raft) BroadcastHeartBeat(t bool) {
 	if rf.role != leader {
 		return
@@ -332,6 +345,7 @@ func (rf *Raft) BroadcastHeartBeat(t bool) {
 	if t {
 		for i, _ := range rf.peers {
 			if i != rf.me {
+
 				go rf.sendAppendEntries(i, &AppendEntriesArgs{
 					Term:     rf.currentTerm,
 					LeaderID: rf.me,

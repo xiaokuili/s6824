@@ -137,7 +137,7 @@ func (cfg *config) crash1(i int) {
 	}
 }
 
-// 
+//
 func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	err_msg := ""
 	v := m.Command
@@ -350,6 +350,7 @@ func (cfg *config) disconnect(i int) {
 			cfg.net.Enable(endname, false)
 		}
 	}
+
 }
 
 func (cfg *config) rpcCount(server int) int {

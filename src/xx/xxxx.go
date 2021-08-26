@@ -1,29 +1,23 @@
 package main
 
-import (
-	"fmt"
-	"sync"
-	"time"
-)
+import "fmt"
 
-// 到底锁应该加指针吗
+type Raft struct {
+	name string
+}
+
+// golang slice Copy
+
 func main() {
-	cond := sync.NewCond(&sync.Mutex{})
-	var done bool = true
-	go func() {
-		cond.L.Lock()
-		done = false
-		for done {
-			cond.Wait()
-		}
+	r := make([]*Raft, 0)
+	r = append(r, &Raft{"1"})
 
-		fmt.Println("free")
-		cond.L.Unlock()
-	}()
-	time.Sleep(time.Second)
-	// done = false
+	r = append(r, &Raft{"2"})
 
-	cond.Signal()
+	r = append(r, &Raft{"3"})
 
-	time.Sleep(time.Second)
+	r2 := make([]*Raft, len(r))
+	copy(r2, r)
+	fmt.Println(r)
+	fmt.Println(r2)
 }
